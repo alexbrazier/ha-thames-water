@@ -42,6 +42,7 @@ from .const import (
     NEXT_LITER_COST_KEY,
     NEXT_LITER_COST_START_DATE_KEY,
     RATE_REMINDER_DAYS_KEY,
+    TEST_MODE_KEY,
 )
 from .entity import ThamesWaterEntity
 from .thameswaterclient import ThamesWater
@@ -256,6 +257,47 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
             return DEFAULT_RATE_REMINDER_DAYS
         return reminder_days
 
+    def _is_test_mode(self) -> bool:
+        """Return whether synthetic test mode data generation is enabled."""
+        raw_value = self._config_entry.options.get(
+            TEST_MODE_KEY,
+            self._config_entry.data.get(TEST_MODE_KEY, False),
+        )
+        return bool(raw_value)
+
+    def _build_test_readings(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> tuple[list[dict], float]:
+        """Generate deterministic hourly readings for local testing."""
+        readings: list[dict] = []
+        latest_usage = 0.0
+        current = start_date
+
+        while current <= end_date:
+            daily_total = 0.0
+            # Deterministic but non-flat pattern: 10, 11, 12, 13 repeating each hour.
+            for hour in range(24):
+                usage = float(10 + (hour % 4))
+                daily_total += usage
+                readings.append(
+                    {
+                        "dt": datetime(current.year, current.month, current.day, hour, 0),
+                        "state": usage,
+                    }
+                )
+            latest_usage = daily_total
+            current = current + timedelta(days=1)
+
+        _LOGGER.warning(
+            "TEST MODE ENABLED: Generated %d synthetic hourly readings from %s to %s",
+            len(readings),
+            start_date,
+            end_date,
+        )
+        return readings, latest_usage
+
     async def _promote_next_rate_if_due(self) -> None:
         """Promote next rate to current and clear next fields once start date has passed."""
         next_liter_cost = self._get_next_liter_cost()
@@ -385,108 +427,124 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
             last_stats = None
             last_cost_stats = None
 
-        # Data is available from at least 3 days ago.
-        end_dt = datetime.now() - timedelta(days=3)
-        if (
-            last_stats is not None
-            and last_stats.get("sum") is not None
-            and last_stats.get("start") is not None
-        ):
-            start_dt = dt_util.as_utc(datetime.fromtimestamp(last_stats.get("start")))
+        test_mode_enabled = self._is_test_mode()
+        if test_mode_enabled:
+            # In test mode, use the most recent days to make tariff boundary testing quick.
+            end_dt = datetime.now()
+            start_dt = end_dt - timedelta(days=4)
         else:
-            start_dt = end_dt - timedelta(days=30)
+            # Live mode uses Thames Water delayed data.
+            end_dt = datetime.now() - timedelta(days=3)
+            if (
+                last_stats is not None
+                and last_stats.get("sum") is not None
+                and last_stats.get("start") is not None
+            ):
+                start_dt = dt_util.as_utc(
+                    datetime.fromtimestamp(last_stats.get("start"))
+                )
+            else:
+                start_dt = end_dt - timedelta(days=30)
 
         current_date = start_dt.date()
         end_date = end_dt.date()
 
-        try:
-            _LOGGER.debug("Creating Thames Water Client")
-            async with asyncio.timeout(120):
-                tw_client = await self._hass.async_add_executor_job(
-                    ThamesWater,
-                    self._username,
-                    self._password,
-                    self._account_number,
-                )
-        except TimeoutError:
-            _LOGGER.error("Timeout creating Thames Water client")
-            return
-        except asyncio.CancelledError:
-            _LOGGER.warning("Thames Water client creation was cancelled")
-            raise
-        except Exception as err:
-            _LOGGER.error("Error creating Thames Water client: %s", err)
-            return
-
         # readings holds all hourly data for the entire period.
         readings: list[dict] = []
-        latest_usage = 0
+        latest_usage = 0.0
 
-        while current_date <= end_date:
-            year = current_date.year
-            month = current_date.month
-            day = current_date.day
-            current_date = current_date + timedelta(days=1)
-
-            d = datetime(year, month, day)
-            _LOGGER.debug("Fetching data for %s/%s/%s", day, month, year)
-
+        if test_mode_enabled:
+            readings, latest_usage = self._build_test_readings(
+                start_date=current_date,
+                end_date=end_date,
+            )
+        else:
             try:
-                async with asyncio.timeout(30):
-                    data = await self._hass.async_add_executor_job(
-                        tw_client.get_meter_usage,
-                        self._meter_id,
-                        d,
-                        d,
+                _LOGGER.debug("Creating Thames Water Client")
+                async with asyncio.timeout(120):
+                    tw_client = await self._hass.async_add_executor_job(
+                        ThamesWater,
+                        self._username,
+                        self._password,
+                        self._account_number,
                     )
             except TimeoutError:
-                _LOGGER.warning("Timeout fetching data for %s/%s/%s", day, month, year)
-                break
+                _LOGGER.error("Timeout creating Thames Water client")
+                return
+            except asyncio.CancelledError:
+                _LOGGER.warning("Thames Water client creation was cancelled")
+                raise
             except Exception as err:
-                _LOGGER.warning(
-                    "Could not get data for %s/%s/%s: %s", day, month, year, err
-                )
-                break
+                _LOGGER.error("Error creating Thames Water client: %s", err)
+                return
 
-            if (
-                data is None
-                or data.Lines is None
-                or data.IsDataAvailable is False
-                or data.IsError
-            ):
-                break
+            while current_date <= end_date:
+                year = current_date.year
+                month = current_date.month
+                day = current_date.day
+                current_date = current_date + timedelta(days=1)
 
-            # Process the returned data; expect a "Lines" list.
-            lines = data.Lines
+                d = datetime(year, month, day)
+                _LOGGER.debug("Fetching data for %s/%s/%s", day, month, year)
 
-            if len(lines) < 24:
-                _LOGGER.warning(
-                    "Stopping at %s/%s/%s - only %d/24 hours available, Thames Water data not yet complete",
-                    day,
-                    month,
-                    year,
-                    len(lines),
-                )
-                break
-
-            latest_usage = 0
-            for line in lines:
-                time_str = line.Label
-                usage = line.Usage
-                latest_usage += usage
                 try:
-                    hour, minute = map(int, time_str.split(":"))
-                except (ValueError, AttributeError) as err:
-                    _LOGGER.error("Error parsing time %s: %s", time_str, err)
-                    continue
+                    async with asyncio.timeout(30):
+                        data = await self._hass.async_add_executor_job(
+                            tw_client.get_meter_usage,
+                            self._meter_id,
+                            d,
+                            d,
+                        )
+                except TimeoutError:
+                    _LOGGER.warning(
+                        "Timeout fetching data for %s/%s/%s", day, month, year
+                    )
+                    break
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Could not get data for %s/%s/%s: %s", day, month, year, err
+                    )
+                    break
 
-                naive_datetime = datetime(year, month, day, hour, minute)
-                readings.append(
-                    {
-                        "dt": naive_datetime,
-                        "state": usage,  # Usage in Liters per hour
-                    }
-                )
+                if (
+                    data is None
+                    or data.Lines is None
+                    or data.IsDataAvailable is False
+                    or data.IsError
+                ):
+                    break
+
+                # Process the returned data; expect a "Lines" list.
+                lines = data.Lines
+
+                if len(lines) < 24:
+                    _LOGGER.warning(
+                        "Stopping at %s/%s/%s - only %d/24 hours available, Thames Water data not yet complete",
+                        day,
+                        month,
+                        year,
+                        len(lines),
+                    )
+                    break
+
+                latest_usage = 0
+                for line in lines:
+                    time_str = line.Label
+                    usage = line.Usage
+                    latest_usage += usage
+                    try:
+                        hour, minute = map(int, time_str.split(":"))
+                    except (ValueError, AttributeError) as err:
+                        _LOGGER.error("Error parsing time %s: %s", time_str, err)
+                        continue
+
+                    naive_datetime = datetime(year, month, day, hour, minute)
+                    readings.append(
+                        {
+                            "dt": naive_datetime,
+                            "state": usage,  # Usage in Liters per hour
+                        }
+                    )
 
         _LOGGER.info("Fetched %d historical entries", len(readings))
 

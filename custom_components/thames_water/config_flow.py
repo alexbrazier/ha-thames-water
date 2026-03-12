@@ -19,6 +19,7 @@ from .const import (
     NEXT_LITER_COST_KEY,
     NEXT_LITER_COST_START_DATE_KEY,
     RATE_REMINDER_DAYS_KEY,
+    TEST_MODE_KEY,
 )
 
 
@@ -189,6 +190,10 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         )
                     ),
                 ): str,
+                vol.Optional(
+                    TEST_MODE_KEY,
+                    default=defaults.get(TEST_MODE_KEY, False),
+                ): bool,
                 vol.Optional(
                     "fetch_hours",
                     default=defaults.get("fetch_hours", "15,23"),

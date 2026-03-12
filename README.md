@@ -52,6 +52,7 @@ The current cost per litre can be configured in the device configuration page.
 You can also set a `next` cost and a `next cost start date` (YYYY-MM-DD), and the integration will automatically switch cost calculations on that date.
 When the next start date is reached, the integration auto-promotes `next` cost to current cost and clears `next` fields.
 The integration can also create a Home Assistant persistent reminder before April 1 if `next` cost is blank (default: 60 days before April 1; blank reminder setting disables this).
+For local verification, a temporary `test mode` option is available to generate synthetic hourly readings for the most recent few days without calling Thames Water.
 Changing this value will only affect new readings. If you want to update past readings you'll need to remove the integration, delete the statistics and add the integration again.
 
 You can set at what time it will try and fetch new data using the fetch_data parameter.
