@@ -269,8 +269,8 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
 
         new_options = dict(self._config_entry.options)
         new_options["liter_cost"] = next_liter_cost
-        new_options.pop(NEXT_LITER_COST_KEY, None)
-        new_options.pop(NEXT_LITER_COST_START_DATE_KEY, None)
+        new_options[NEXT_LITER_COST_KEY] = ""
+        new_options[NEXT_LITER_COST_START_DATE_KEY] = ""
         self.hass.config_entries.async_update_entry(
             self._config_entry, options=new_options
         )
