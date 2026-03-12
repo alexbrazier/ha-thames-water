@@ -10,6 +10,9 @@
           "account_number": "Account Number",
           "meter_id": "Meter ID",
           "liter_cost": "Cost per Liter (GBP)",
+          "next_liter_cost": "Next Cost per Liter (GBP)",
+          "next_liter_cost_start_date": "Next Cost Start Date (YYYY-MM-DD)",
+          "rate_reminder_days": "Tariff Reminder Days Before April 1 (blank disables)",
           "fetch_hours": "Fetch Hours (comma-separated, e.g. 15,23)"
         },
         "data_description": {
@@ -18,6 +21,9 @@
           "account_number": "Your Thames Water account number",
           "meter_id": "Your water meter ID",
           "liter_cost": "Cost per liter in GBP (e.g., 0.00138)",
+          "next_liter_cost": "Optional future cost per liter in GBP (e.g., 0.00150)",
+          "next_liter_cost_start_date": "Date when the next liter cost starts (YYYY-MM-DD)",
+          "rate_reminder_days": "Days before April 1 to remind you to set next values (default 60, blank disables)",
           "fetch_hours": "Hours to fetch data daily (comma-separated, e.g. 15,23)"
         }
       },
@@ -29,6 +35,9 @@
           "account_number": "Account Number",
           "meter_id": "Meter ID",
           "liter_cost": "Cost per Liter (GBP)",
+          "next_liter_cost": "Next Cost per Liter (GBP)",
+          "next_liter_cost_start_date": "Next Cost Start Date (YYYY-MM-DD)",
+          "rate_reminder_days": "Tariff Reminder Days Before April 1 (blank disables)",
           "fetch_hours": "Fetch Hours"
         },
         "data_description": {
@@ -37,6 +46,9 @@
           "account_number": "Your Thames Water account number",
           "meter_id": "Your water meter ID",
           "liter_cost": "Cost per liter in GBP (e.g., 0.00138)",
+          "next_liter_cost": "Optional future cost per liter in GBP (e.g., 0.00150)",
+          "next_liter_cost_start_date": "Date when the next liter cost starts (YYYY-MM-DD)",
+          "rate_reminder_days": "Days before April 1 to remind you to set next values (default 60, blank disables)",
           "fetch_hours": "Hours to fetch data daily (comma-separated, e.g. 15,23)"
         }
       }
@@ -50,6 +62,13 @@
     "error": {
       "invalid_liter_cost": "Not a valid number.",
       "liter_cost_out_of_range": "Value must be between 0.00005 and 1.0.",
+      "invalid_date": "Invalid date. Use YYYY-MM-DD.",
+      "next_liter_cost_required": "Set a next liter cost when a next start date is provided.",
+      "next_start_date_required": "Set a next start date when a next liter cost is provided.",
+      "invalid_rate_reminder_days": "Reminder days must be a whole number.",
+      "rate_reminder_days_out_of_range": "Reminder days must be between 1 and 365 (leave blank to disable).",
+      "tariff_reminder_title": "Thames Water Tariff Reminder",
+      "tariff_reminder_message": "Thames Water yearly tariff reminder.\n\nNo next liter cost is currently set.\nPlease set `next_liter_cost` and `next_liter_cost_start_date` before {april_first}.\nThis reminder starts {reminder_days} days before April 1.",
       "invalid_fetch_hours": "Invalid format. Use comma-separated hours.",
       "fetch_hours_out_of_range": "Hours must be between 0 and 23."
     }
@@ -60,10 +79,16 @@
         "title": "Thames Water Options",
         "data": {
           "liter_cost": "Cost per Liter (GBP)",
+          "next_liter_cost": "Next Cost per Liter (GBP)",
+          "next_liter_cost_start_date": "Next Cost Start Date (YYYY-MM-DD)",
+          "rate_reminder_days": "Tariff Reminder Days Before April 1 (blank disables)",
           "fetch_hours": "Fetch Hours"
         },
         "data_description": {
           "liter_cost": "Cost per liter in GBP (e.g., 0.00138)",
+          "next_liter_cost": "Optional future cost per liter in GBP (e.g., 0.00150)",
+          "next_liter_cost_start_date": "Date when the next liter cost starts (YYYY-MM-DD)",
+          "rate_reminder_days": "Days before April 1 to remind you to set next values (default 60, blank disables)",
           "fetch_hours": "Hours to fetch data daily (comma-separated, e.g. 15,23)"
         }
       }

@@ -48,7 +48,10 @@ Then, add the integration:
 The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**.
 
 **thames_water:thameswater_cost** can be used to track costs.
-The cost per litre can be configured in the device configuration page.
+The current cost per litre can be configured in the device configuration page.
+You can also set a `next` cost and a `next cost start date` (YYYY-MM-DD), and the integration will automatically switch cost calculations on that date.
+When the next start date is reached, the integration auto-promotes `next` cost to current cost and clears `next` fields.
+The integration can also create a Home Assistant persistent reminder before April 1 if `next` cost is blank (default: 60 days before April 1; blank reminder setting disables this).
 Changing this value will only affect new readings. If you want to update past readings you'll need to remove the integration, delete the statistics and add the integration again.
 
 You can set at what time it will try and fetch new data using the fetch_data parameter.
@@ -56,5 +59,3 @@ You can set at what time it will try and fetch new data using the fetch_data par
 [![Open your Home Assistant instance and show your Energy configuration panel.](https://my.home-assistant.io/badges/config_energy.svg)](https://my.home-assistant.io/redirect/config_energy/)
 
 ![Dashboard](./dashboard.png)
-
-

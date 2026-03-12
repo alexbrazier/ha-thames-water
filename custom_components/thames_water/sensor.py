@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 import logging
 from operator import itemgetter
 import random
 
+from homeassistant.components import persistent_notification
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
     StatisticData,
@@ -28,9 +30,19 @@ from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.translation import async_get_translations
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_LITER_COST, DOMAIN
+from .const import (
+    DEFAULT_RATE_REMINDER_DAYS,
+    DEFAULT_LITER_COST,
+    DOMAIN,
+    MAX_RATE_REMINDER_DAYS,
+    MIN_RATE_REMINDER_DAYS,
+    NEXT_LITER_COST_KEY,
+    NEXT_LITER_COST_START_DATE_KEY,
+    RATE_REMINDER_DAYS_KEY,
+)
 from .entity import ThamesWaterEntity
 from .thameswaterclient import ThamesWater
 
@@ -80,7 +92,7 @@ async def async_setup_entry(
 def _generate_statistics_from_readings(
     readings: list[dict],
     cumulative_start: float = 0.0,
-    liter_cost: float | None = None,
+    cost_for_dt: Callable[[datetime], float] | None = None,
 ) -> list[StatisticData]:
     """Convert a list of (datetime, reading) entries into StatisticData entries."""
     sorted_readings = sorted(readings, key=lambda x: x["dt"])
@@ -89,10 +101,10 @@ def _generate_statistics_from_readings(
     for elem in sorted_readings:
         # Normalize the start timestamp to the hour
         hour_ts = elem["dt"].replace(minute=0, second=0, microsecond=0)
-        if liter_cost is None:
+        if cost_for_dt is None:
             value = elem["state"]
         else:
-            value = elem["state"] * liter_cost
+            value = elem["state"] * cost_for_dt(elem["dt"])
         cumulative += value
         stats.append(
             StatisticData(
@@ -170,6 +182,145 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
         self._meter_id: int = meter_id
         self._attr_unique_id = f"water_usage_{self._meter_id}"
         self._attr_should_poll = False
+
+    def _get_current_liter_cost(self) -> float:
+        """Read current liter cost from options first, then config entry data."""
+        raw_value = self._config_entry.options.get(
+            "liter_cost",
+            self._config_entry.data.get("liter_cost", DEFAULT_LITER_COST),
+        )
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            _LOGGER.warning("Invalid liter_cost value: %s, using default", raw_value)
+            return DEFAULT_LITER_COST
+
+    def _get_next_liter_cost(self) -> float | None:
+        """Read next liter cost if configured."""
+        raw_value = self._config_entry.options.get(
+            NEXT_LITER_COST_KEY,
+            self._config_entry.data.get(NEXT_LITER_COST_KEY),
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            _LOGGER.warning("Invalid %s value: %s", NEXT_LITER_COST_KEY, raw_value)
+            return None
+
+    def _get_next_liter_cost_start_date(self) -> date | None:
+        """Read and parse next liter cost start date (YYYY-MM-DD) if configured."""
+        raw_value = self._config_entry.options.get(
+            NEXT_LITER_COST_START_DATE_KEY,
+            self._config_entry.data.get(NEXT_LITER_COST_START_DATE_KEY),
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            return datetime.strptime(str(raw_value), "%Y-%m-%d").date()
+        except ValueError:
+            _LOGGER.warning(
+                "Invalid %s value '%s'. Expected format YYYY-MM-DD.",
+                NEXT_LITER_COST_START_DATE_KEY,
+                raw_value,
+            )
+            return None
+
+    def _get_rate_reminder_days(self) -> int | None:
+        """Read reminder days; blank disables reminders."""
+        raw_value = self._config_entry.options.get(
+            RATE_REMINDER_DAYS_KEY,
+            self._config_entry.data.get(
+                RATE_REMINDER_DAYS_KEY, DEFAULT_RATE_REMINDER_DAYS
+            ),
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            reminder_days = int(raw_value)
+        except (TypeError, ValueError):
+            _LOGGER.warning("Invalid %s value: %s", RATE_REMINDER_DAYS_KEY, raw_value)
+            return DEFAULT_RATE_REMINDER_DAYS
+
+        if (
+            reminder_days < MIN_RATE_REMINDER_DAYS
+            or reminder_days > MAX_RATE_REMINDER_DAYS
+        ):
+            _LOGGER.warning(
+                "%s value %s is out of range, using default %s",
+                RATE_REMINDER_DAYS_KEY,
+                reminder_days,
+                DEFAULT_RATE_REMINDER_DAYS,
+            )
+            return DEFAULT_RATE_REMINDER_DAYS
+        return reminder_days
+
+    async def _promote_next_rate_if_due(self) -> None:
+        """Promote next rate to current and clear next fields once start date has passed."""
+        next_liter_cost = self._get_next_liter_cost()
+        next_start_date = self._get_next_liter_cost_start_date()
+        if next_liter_cost is None or next_start_date is None:
+            return
+
+        today = dt_util.now().date()
+        if today < next_start_date:
+            return
+
+        new_options = dict(self._config_entry.options)
+        new_options["liter_cost"] = next_liter_cost
+        new_options.pop(NEXT_LITER_COST_KEY, None)
+        new_options.pop(NEXT_LITER_COST_START_DATE_KEY, None)
+        self.hass.config_entries.async_update_entry(
+            self._config_entry, options=new_options
+        )
+        _LOGGER.info(
+            "Promoted %s to liter_cost for start date %s and cleared next rate fields",
+            next_liter_cost,
+            next_start_date,
+        )
+
+    async def _update_rate_change_notification(self) -> None:
+        """Show or dismiss annual reminder before April 1 when next cost is blank."""
+        notification_id = f"{DOMAIN}_{self._config_entry.entry_id}_next_rate_reminder"
+        reminder_days = self._get_rate_reminder_days()
+        next_liter_cost = self._get_next_liter_cost()
+        if reminder_days is None or next_liter_cost is not None:
+            persistent_notification.async_dismiss(self._hass, notification_id)
+            return
+
+        today = dt_util.now().date()
+        april_first = date(today.year, 4, 1)
+        target_april_first = (
+            april_first if today < april_first else date(today.year + 1, 4, 1)
+        )
+        reminder_start = target_april_first - timedelta(days=reminder_days)
+
+        if reminder_start <= today < target_april_first:
+            translations = await async_get_translations(
+                self._hass,
+                self._hass.config.language,
+                "config",
+                [DOMAIN],
+            )
+            title = translations[
+                f"component.{DOMAIN}.config.error.tariff_reminder_title"
+            ]
+            message_template = translations[
+                f"component.{DOMAIN}.config.error.tariff_reminder_message"
+            ]
+            message = message_template.format(
+                april_first=target_april_first.isoformat(),
+                reminder_days=reminder_days,
+            )
+            persistent_notification.async_create(
+                self._hass,
+                message,
+                title=title,
+                notification_id=notification_id,
+            )
+        else:
+            persistent_notification.async_dismiss(self._hass, notification_id)
 
     @property
     def state(self) -> float | None:
@@ -339,11 +490,16 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
 
         _LOGGER.info("Fetched %d historical entries", len(readings))
 
-        liter_cost = self._config_entry.options.get(
-            "liter_cost", self._config_entry.data.get("liter_cost", DEFAULT_LITER_COST)
+        current_liter_cost = self._get_current_liter_cost()
+        next_liter_cost = self._get_next_liter_cost()
+        next_start_date = self._get_next_liter_cost_start_date()
+        _LOGGER.debug(
+            "Using current liter cost: %s, next liter cost: %s, next start date: %s",
+            current_liter_cost,
+            next_liter_cost,
+            next_start_date,
         )
-
-        _LOGGER.debug("Using Liter Cost: %s", liter_cost)
+        await self._update_rate_change_notification()
 
         if (
             last_stats is not None
@@ -388,7 +544,17 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
 
         if len(readings) == 0:
             _LOGGER.warning("No new readings available")
+            await self._promote_next_rate_if_due()
             return
+
+        def cost_for_dt(dt_value: datetime) -> float:
+            if (
+                next_liter_cost is not None
+                and next_start_date is not None
+                and dt_value.date() >= next_start_date
+            ):
+                return next_liter_cost
+            return current_liter_cost
 
         # Generate new StatisticData entries using the previous cumulative sum.
         stats = _generate_statistics_from_readings(
@@ -397,7 +563,7 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
         cost_stats = _generate_statistics_from_readings(
             readings,
             cumulative_start=initial_cost_cumulative,
-            liter_cost=float(liter_cost),
+            cost_for_dt=cost_for_dt,
         )
         if latest_usage > 0:
             self._state = latest_usage
@@ -426,6 +592,7 @@ class ThamesWaterSensor(ThamesWaterEntity, SensorEntity):
         try:
             async_add_external_statistics(self._hass, metadata_consumption, stats)
             async_add_external_statistics(self._hass, metadata_cost, cost_stats)
+            await self._promote_next_rate_if_due()
         except Exception as err:
             _LOGGER.error("Error writing statistics to database: %s", err)
             raise
