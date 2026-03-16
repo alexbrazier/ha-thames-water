@@ -38,7 +38,7 @@ async def async_setup_entry(
     elif NEXT_LITER_COST_KEY in entry.data:
         next_liter_cost = entry.data[NEXT_LITER_COST_KEY]
     else:
-        next_liter_cost = liter_cost
+        next_liter_cost = None
 
     entities = [
         ThamesWaterLiterCost(entry, initial_value=liter_cost),
@@ -116,22 +116,21 @@ class ThamesWaterNextLiterCost(ThamesWaterEntity, NumberEntity):
     ) -> None:
         """Initialize the Thames Water Next Liter Cost number entity."""
         self._config_entry = config_entry
-        if initial_value is None:
-            self._value = DEFAULT_LITER_COST
+        if initial_value in (None, ""):
+            self._value: float | None = None
         else:
             try:
                 self._value = float(initial_value)
             except (TypeError, ValueError):
                 _LOGGER.debug(
-                    "Invalid initial next_liter_cost value '%s'; using default %s",
+                    "Invalid initial next_liter_cost value '%s'; leaving empty",
                     initial_value,
-                    DEFAULT_LITER_COST,
                 )
-                self._value = DEFAULT_LITER_COST
+                self._value = None
         self._attr_unique_id = f"{config_entry.entry_id}_next_liter_cost"
 
     @property
-    def native_value(self) -> float:
+    def native_value(self) -> float | None:
         """Return the next liter cost value."""
         return self._value
 
